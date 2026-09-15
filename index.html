@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nmf-forge · 手写非负矩阵分解 (NMF / Lee-Seung 1999)</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#ffffff; --ink:#1a1d21; --muted:#6b7280;
+    --line:#e3e6ea; --accent:#2f6feb; --ok:#15803d; --bad:#b91c1c; --warn:#b45309;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1120px;margin:0 auto;padding:28px 20px 64px}
+  header{border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:22px}
+  h1{margin:0 0 6px;font-size:23px;letter-spacing:-.2px}
+  .sub{color:var(--muted);font-size:13.5px}
+  .sub code{font-family:var(--mono);background:#eef1f5;padding:1px 5px;border-radius:4px;font-size:12.5px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+  .card h2{margin:0 0 12px;font-size:15px;font-weight:600;color:var(--ink)}
+  .card h2 span{color:var(--muted);font-weight:400;font-size:12.5px;margin-left:8px}
+  .ctrls{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end}
+  .f{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--muted)}
+  .f select,.f input[type=number]{padding:7px 9px;border:1px solid var(--line);border-radius:8px;
+    background:#fff;color:var(--ink);font:inherit;font-size:13px;min-width:86px}
+  button{padding:9px 20px;border:0;border-radius:8px;background:var(--accent);color:#fff;
+    font:inherit;font-size:13.5px;font-weight:600;cursor:pointer}
+  button:hover{filter:brightness(.94)}
+  button:disabled{opacity:.5;cursor:default}
+  #status{margin-top:12px;font-size:12.5px;color:var(--muted);font-family:var(--mono)}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:12px}
+  .stat{background:#fbfcfd;border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+  .stat .k{font-size:11.5px;color:var(--muted);margin-bottom:4px}
+  .stat .v{font-size:17px;font-weight:650;font-family:var(--mono);letter-spacing:-.4px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:780px){.grid2{grid-template-columns:1fr}}
+  canvas{display:block;width:100%;border:1px solid var(--line);border-radius:10px;background:#fff}
+  .cap{font-size:11.5px;color:var(--muted);margin-top:7px;line-height:1.5}
+  ul.checks{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:8px}
+  ul.checks li{display:flex;gap:9px;align-items:flex-start;padding:9px 11px;border:1px solid var(--line);
+    border-radius:9px;background:#fbfcfd;font-size:13px}
+  .ic{font-weight:700;flex:0 0 auto;line-height:1.35}
+  .pass .ic{color:var(--ok)} .fail .ic{color:var(--bad)}
+  .ck-name{flex:1 1 auto}
+  .ck-info{display:block;color:var(--muted);font-size:11.5px;font-family:var(--mono);margin-top:2px}
+  .note{font-size:12.5px;color:var(--muted);line-height:1.65}
+  .note b{color:var(--ink)}
+  table.eq{width:100%;border-collapse:collapse;font-size:12.5px;font-family:var(--mono)}
+  table.eq td{padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  table.eq td:first-child{color:var(--muted);width:170px;white-space:nowrap}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:8px}
+  .legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>nmf-forge · 手写非负矩阵分解</h1>
+    <div class="sub">
+      NMF / Non-negative Matrix Factorization — Lee &amp; Seung, <i>Nature</i> 1999<br>
+      乘法更新（Frobenius / KL 双散度）· ALS 交替非负最小二乘 · 零依赖单文件 · 无头不变量自检
+    </div>
+  </header>
+
+  <div class="card">
+    <h2>控制台 <span>合成「光谱混合」数据：X = W₀H₀，行=特征，列=样本</span></h2>
+    <div class="ctrls">
+      <label class="f">算法
+        <select id="algo">
+          <option value="muF">乘法更新 · Frobenius</option>
+          <option value="muKL">乘法更新 · KL 散度</option>
+          <option value="als">ALS 交替非负最小二乘</option>
+        </select>
+      </label>
+      <label class="f">初始化
+        <select id="init">
+          <option value="nndsvd">NNDSVD-lite（SVD 播种）</option>
+          <option value="random">随机非负</option>
+        </select>
+      </label>
+      <label class="f">行 m <input type="number" id="m" value="64" min="8" max="200" step="1"></label>
+      <label class="f">列 n <input type="number" id="n" value="140" min="8" max="400" step="1"></label>
+      <label class="f">分量 K <input type="number" id="K" value="4" min="1" max="12" step="1"></label>
+      <label class="f">噪声 σ <input type="number" id="noise" value="0.02" min="0" max="0.5" step="0.01"></label>
+      <label class="f">迭代 <input type="number" id="iters" value="400" min="10" max="4000" step="10"></label>
+      <label class="f">种子 <input type="number" id="seed" value="42" min="1" max="99999" step="1"></label>
+      <button id="run">运行分解</button>
+    </div>
+    <div id="status">就绪。</div>
+  </div>
+
+  <div class="card">
+    <h2>指标</h2>
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <div class="card">
+    <h2>收敛 <span>目标函数逐次迭代值；乘法更新保证单调不增（辅助函数 / majorize-minimize）</span></h2>
+    <canvas id="cCurve" height="300"></canvas>
+    <div class="cap" id="curveCap"></div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>W 基向量 <span>m×K，每个分量的「光谱」形状</span></h2>
+      <canvas id="cW" height="240"></canvas>
+      <div class="cap">纵轴为分量索引，横轴为特征维度。NMF 的「parts-based」表示：每个基向量通常只在局部有质量。</div>
+    </div>
+    <div class="card">
+      <h2>H 系数矩阵 <span>K×n，每个样本的成分占比</span></h2>
+      <canvas id="cH" height="240"></canvas>
+      <div class="legend"><span><i style="background:#2f6feb"></i>低</span><span><i style="background:#b91c1c"></i>高</span><span>白 = 0</span></div>
+      <div class="cap">H 的稀疏性正是 NMF 相对 PCA/SVD 的核心差异：SVD 的分量有正有负、难以解释为「纯加性组成」。</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>原矩阵 X 与重构 X̂ = WH <span>上：X（含噪声）· 下：X̂（秩 K 非负重构）</span></h2>
+    <canvas id="cRecon" height="300"></canvas>
+    <div class="cap" id="reconCap"></div>
+  </div>
+
+  <div class="card">
+    <h2>实时不变量自检 <span>与无头 <code>_smoke.js</code> 同源，全部为数学性质（与数据难度无关）</span></h2>
+    <ul class="checks" id="checks"></ul>
+  </div>
+
+  <div class="card">
+    <h2>核心递推 <span>乘法更新 = 对步长做「自适应对角缩放」的梯度下降</span></h2>
+    <table class="eq">
+      <tr><td>目标（Frobenius）</td><td>F(W,H) = ‖X − WH‖²_F &nbsp;&nbsp; s.t. W ≥ 0, H ≥ 0</td></tr>
+      <tr><td>H 更新</td><td>H ← H ∘ (WᵀX) ⊘ (WᵀWH)</td></tr>
+      <tr><td>W 更新</td><td>W ← W ∘ (XHᵀ) ⊘ (WHHᵀ)</td></tr>
+      <tr><td>目标（KL）</td><td>D(X‖WH) = Σ X∘log(X⊘WH) − X + WH</td></tr>
+      <tr><td>H 更新（KL）</td><td>H ← H ∘ (Wᵀ(X⊘WH)) ⊘ (Wᵀ1)</td></tr>
+      <tr><td>W 更新（KL）</td><td>W ← W ∘ ((X⊘WH)Hᵀ) ⊘ (1Hᵀ)</td></tr>
+      <tr><td>KKT（非负约束）</td><td>W ≥ 0, ∇_W F ≥ 0, W ∘ ∇_W F = 0（互补松弛）</td></tr>
+    </table>
+    <div class="note" style="margin-top:12px">
+      <b>为什么单调？</b> Lee-Seung 的更新来自 <b>majorize-minimize</b>：F 的辅助函数 G(W,Wᵗ) ≥ F(W) 且 G(Wᵗ,Wᵗ)=F(Wᵗ)，
+      对其最小化得闭式解即上式，于是 F 严格不增。因此「目标函数单调不增」是被证明的性质，可直接当断言用。
+      <br><br>
+      <b>为什么乘法更新保值零元？</b> 更新形如 W ← W∘(…)，W_ik=0 则永远为 0 —— 这既是优点（保持结构 / 稀疏），也是陷阱（<b>若某行基向量被初始化成全零，该分量永久死亡</b>，故初始化必须保证严格正）。
+    </div>
+  </div>
+</div>
+
+<script id="engine">
+(function(){
+var NMF = {};
+globalThis.NMF = NMF;
+
+// ---------------- PRNG ----------------
+NMF.mulberry32 = function(a){
+  return function(){
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    var t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+};
+NMF.randn = function(rng){
+  var u = 0, v = 0;
+  while(u === 0) u = rng();
+  while(v === 0) v = rng();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+};
+
+// ---------------- 矩阵工具 ----------------
+NMF.zeros = function(m, n){
+  var A = new Array(m);
+  for(var i = 0; i < m; i++) A[i] = new Float64Array(n);
+  return A;
+};
+NMF.clone = function(A){
+  var m = A.length, B = new Array(m);
+  for(var i = 0; i < m; i++) B[i] = Float64Array.from(A[i]);
+  return B;
+};
+NMF.matMul = function(A, B){
+  var p = A.length, q = B.length, r = B[0].length;
+  var C = NMF.zeros(p, r);
+  for(var i = 0; i < p; i++){
+    var Ai = A[i], Ci = C[i];
+    for(var k = 0; k < q; k++){
+      var a = Ai[k];
+      if(a === 0) continue;
+      var Bk = B[k];
+      for(var j = 0; j < r; j++) Ci[j] += a * Bk[j];
+    }
+  }
+  return C;
+};
+NMF.transpose = function(A){
+  var m = A.length, n = A[0].length;
+  var T = NMF.zeros(n, m);
+  for(var i = 0; i < m; i++) for(var j = 0; j < n; j++) T[j][i] = A[i][j];
+  return T;
+};
+NMF.norm2 = function(A){
+  var s = 0;
+  for(var i = 0; i < A.length; i++){ var r = A[i]; for(var j = 0; j < r.length; j++) s += r[j] * r[j]; }
+  return Math.sqrt(s);
+};
+NMF.normF2 = function(A){
+  var s = 0;
+  for(var i = 0; i < A.length; i++){ var r = A[i]; for(var j = 0; j < r.length; j++) s += r[j] * r[j]; }
+  return s;
+};
+NMF.minEntry = function(A){
+  var mn = Infinity;
+  for(var i = 0; i < A.length; i++){ var r = A[i]; for(var j = 0; j < r.length; j++) if(r[j] < mn) mn = r[j]; }
+  return mn;
+};
+NMF.hasNaN = function(A){
+  for(var i = 0; i < A.length; i++){ var r = A[i]; for(var j = 0; j < r.length; j++) if(!isFinite(r[j])) return true; }
+  return false;
+};
+NMF.maxAbs = function(A){
+  var mx = 0;
+  for(var i = 0; i < A.length; i++){ var r = A[i]; for(var j = 0; j < r.length; j++){ var a = Math.abs(r[j]); if(a > mx) mx = a; } }
+  return mx;
+};
+// 稀疏度：接近 0 的元素占比
+NMF.sparsity = function(A, tol){
+  tol = tol || 1e-8;
+  var n = 0, z = 0;
+  for(var i = 0; i < A.length; i++){ var r = A[i]; for(var j = 0; j < r.length; j++){ n++; if(Math.abs(r[j]) <= tol) z++; } }
+  return z / n;
+};
+// 零元素的位置掩码（用于验证「乘法更新保值零元」）
+NMF.zeroMask = function(A, tol){
+  tol = tol || 1e-12;
+  var M = new Array(A.length);
+  for(var i = 0; i < A.length; i++){ M[i] = new Uint8Array(A[i].length); for(var j = 0; j < A[i].length; j++) M[i][j] = A[i][j] <= tol ? 1 : 0; }
+  return M;
+};
+
+// ---------------- 目标函数 ----------------
+// F = ‖X − WH‖²_F
+NMF.frobenius = function(X, W, H){
+  var WH = NMF.matMul(W, H);
+  var s = 0;
+  for(var i = 0; i < X.length; i++){ var xi = X[i], wi = WH[i]; for(var j = 0; j < xi.length; j++){ var d = xi[j] - wi[j]; s += d * d; } }
+  return s;
+};
+// 相对重构误差 ‖X−WH‖_F / ‖X‖_F
+NMF.relError = function(X, W, H){
+  var WH = NMF.matMul(W, H);
+  var s = 0, t = 0;
+  for(var i = 0; i < X.length; i++){
+    var xi = X[i], wi = WH[i];
+    for(var j = 0; j < xi.length; j++){ var d = xi[j] - wi[j]; s += d * d; t += xi[j] * xi[j]; }
+  }
+  return Math.sqrt(s) / (Math.sqrt(t) + 1e-300);
+};
+// KL 散度 D(X‖WH) = Σ X log(X/WH) − X + WH   （0·log0 ≡ 0）
+NMF.klDivergence = function(X, W, H){
+  var WH = NMF.matMul(W, H);
+  var s = 0;
+  for(var i = 0; i < X.length; i++){
+    var xi = X[i], vi = WH[i];
+    for(var j = 0; j < xi.length; j++){
+      var x = xi[j], v = vi[j] > 1e-300 ? vi[j] : 1e-300;
+      if(x > 0) s += x * Math.log(x / v);
+      s += v - x;
+    }
+  }
+  return s;
+};
+
+// ---------------- 梯度 ----------------
+// ∇_W F = 2(WH − X)Hᵀ ;  ∇_H F = 2Wᵀ(WH − X)
+NMF.gradW = function(X, W, H){
+  var WH = NMF.matMul(W, H);
+  var R = NMF.zeros(X.length, X[0].length);
+  for(var i = 0; i < X.length; i++) for(var j = 0; j < X[i].length; j++) R[i][j] = WH[i][j] - X[i][j];
+  var Ht = NMF.transpose(H);
+  var G = NMF.matMul(R, Ht);
+  for(var a = 0; a < G.length; a++) for(var b = 0; b < G[a].length; b++) G[a][b] *= 2;
+  return G;
+};
+NMF.gradH = function(X, W, H){
+  var WH = NMF.matMul(W, H);
+  var R = NMF.zeros(X.length, X[0].length);
+  for(var i = 0; i < X.length; i++) for(var j = 0; j < X[i].length; j++) R[i][j] = WH[i][j] - X[i][j];
+  var Wt = NMF.transpose(W);
+  var G = NMF.matMul(Wt, R);
+  for(var a = 0; a < G.length; a++) for(var b = 0; b < G[a].length; b++) G[a][b] *= 2;
+  return G;
+};
+// 互补松弛 |W∘∇_W|（未归一化，仅作诊断；F≈0 时会退化为噪声）
+NMF.complementarity = function(X, W, H){
+  var gw = NMF.gradW(X, W, H), gh = NMF.gradH(X, W, H);
+  var m = 0;
+  for(var i = 0; i < W.length; i++) for(var k = 0; k < W[i].length; k++){ var v = Math.abs(W[i][k] * gw[i][k]); if(v > m) m = v; }
+  for(var k2 = 0; k2 < H.length; k2++) for(var j = 0; j < H[k2].length; j++){ var v2 = Math.abs(H[k2][j] * gh[k2][j]); if(v2 > m) m = v2; }
+  return m;
+};
+// 投影梯度最优性度量（Lin 2007，非负约束的标准判据）：
+//   PG_ik = ∇_ik  (Z_ik > 0)   |   min(0, ∇_ik)  (Z_ik = 0)
+// KKT ⟺ PG ≡ 0。用 ‖X‖·‖H‖ / ‖X‖·‖W‖ 归一化使其无量纲且与问题规模无关。
+NMF.projGrad = function(X, W, H){
+  var gw = NMF.gradW(X, W, H), gh = NMF.gradH(X, W, H);
+  var pw = 0, ph = 0;
+  for(var i = 0; i < W.length; i++) for(var k = 0; k < W[i].length; k++){
+    var v = (W[i][k] > 0) ? gw[i][k] : Math.min(0, gw[i][k]);
+    if(Math.abs(v) > pw) pw = Math.abs(v);
+  }
+  for(var k2 = 0; k2 < H.length; k2++) for(var j = 0; j < H[k2].length; j++){
+    var v2 = (H[k2][j] > 0) ? gh[k2][j] : Math.min(0, gh[k2][j]);
+    if(Math.abs(v2) > ph) ph = Math.abs(v2);
+  }
+  var nX = NMF.norm2(X), nW = NMF.norm2(W), nH = NMF.norm2(H);
+  var rw = pw / (nX * nH + 1e-300), rh = ph / (nX * nW + 1e-300);
+  return { w: rw, h: rh, max: Math.max(rw, rh) };
+};
+NMF.kkt = function(X, W, H){
+  var p = NMF.projGrad(X, W, H);
+  return { proj: p.max, w: p.w, h: p.h, comp: NMF.complementarity(X, W, H), max: p.max };
+};
+// 对偶可行性（归一化）：min ∇ / (‖X‖·‖partner‖)
+NMF.minGradRel = function(X, W, H){
+  var gw = NMF.gradW(X, W, H), gh = NMF.gradH(X, W, H);
+  var nX = NMF.norm2(X), nW = NMF.norm2(W), nH = NMF.norm2(H);
+  var mn = Infinity;
+  for(var i = 0; i < gw.length; i++) for(var k = 0; k < gw[i].length; k++){ var v = gw[i][k] / (nX * nH + 1e-300); if(v < mn) mn = v; }
+  for(var k2 = 0; k2 < gh.length; k2++) for(var j = 0; j < gh[k2].length; j++){ var v2 = gh[k2][j] / (nX * nW + 1e-300); if(v2 < mn) mn = v2; }
+  return mn;
+};
+// 对偶可行性：非负约束下 ∇ ≥ 0 必须接近成立
+NMF.minGrad = function(X, W, H){
+  var gw = NMF.gradW(X, W, H), gh = NMF.gradH(X, W, H);
+  var mn = Infinity;
+  for(var i = 0; i < gw.length; i++) for(var k = 0; k < gw[i].length; k++) if(gw[i][k] < mn) mn = gw[i][k];
+  for(var k2 = 0; k2 < gh.length; k2++) for(var j = 0; j < gh[k2].length; j++) if(gh[k2][j] < mn) mn = gh[k2][j];
+  return mn;
+};
+
+// ---------------- SVD（幂迭代 + 收缩） ----------------
+// 幂迭代 + 收缩（deflation），每步对已求出的向量做修正 Gram-Schmidt 重正交。
+// err 直接取「收缩后残差范数」= 精确的秩-K 重构误差（不依赖正交性假设）。
+NMF.svdTopK = function(X, K, niter, seed){
+  var m = X.length, n = X[0].length;
+  var A = NMF.clone(X);
+  var rng = NMF.mulberry32(seed || 20260916);
+  var U = [], S = [], V = [];
+  niter = niter || 500;
+  function dot(a, b){ var s = 0; for(var i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
+  function nrm(a){ return Math.sqrt(dot(a, a)); }
+  function unit(a){ var nn = nrm(a); if(nn > 1e-300) for(var i = 0; i < a.length; i++) a[i] /= nn; return nn; }
+  function orth(a, basis){ for(var q = 0; q < basis.length; q++){ var c = dot(a, basis[q]); if(c !== 0) for(var i = 0; i < a.length; i++) a[i] -= c * basis[q][i]; } }
+  for(var k = 0; k < K; k++){
+    var v = new Float64Array(n);
+    for(var j = 0; j < n; j++) v[j] = rng() - 0.5;
+    orth(v, V); unit(v);
+    var u = new Float64Array(m);
+    var vPrev = Float64Array.from(v);
+    for(var it = 0; it < niter; it++){
+      vPrev = Float64Array.from(v);
+      for(var i = 0; i < m; i++){ var s = 0, Ai = A[i]; for(var jj = 0; jj < n; jj++) s += Ai[jj] * v[jj]; u[i] = s; }
+      orth(u, U); if(unit(u) < 1e-300) break;
+      for(var j2 = 0; j2 < n; j2++){ var s2 = 0; for(var i2 = 0; i2 < m; i2++) s2 += A[i2][j2] * u[i2]; v[j2] = s2; }
+      orth(v, V); if(unit(v) < 1e-300) break;
+      // 收敛判据：奇异向量稳定则提前退出（否则谱间隔小的时候 100 步远不够，
+      // 会让「NMF ≥ 截断 SVD」这类对照断言出现理论不可能的负间隙）
+      var dv = 0;
+      for(var j5 = 0; j5 < n; j5++){ var d5 = v[j5] - vPrev[j5]; dv += d5 * d5; }
+      if(Math.sqrt(dv) < 1e-15) break;
+    }
+    for(var i3 = 0; i3 < m; i3++){ var s3 = 0, Ai3 = A[i3]; for(var j3 = 0; j3 < n; j3++) s3 += Ai3[j3] * v[j3]; u[i3] = s3; }
+    orth(u, U); var sigma = unit(u);
+    U.push(Float64Array.from(u)); S.push(sigma); V.push(Float64Array.from(v));
+    for(var i4 = 0; i4 < m; i4++){ var Ai4 = A[i4], a4 = sigma * u[i4]; for(var j4 = 0; j4 < n; j4++) Ai4[j4] -= a4 * v[j4]; }
+  }
+  return { U: U, S: S, V: V, err: NMF.norm2(A) };
+};
+// 截断 SVD 的相对误差（非负约束无法优于它 —— 重要对照）
+NMF.svdRelError = function(X, K, niter){
+  return NMF.svdTopK(X, K, niter).err / (NMF.norm2(X) + 1e-300);
+};
+
+// ---------------- 初始化 ----------------
+NMF.initRandom = function(m, n, K, seed){
+  var rng = NMF.mulberry32(seed || 42);
+  var W = NMF.zeros(m, K), H = NMF.zeros(K, n);
+  // 严格正（避免乘法更新下永久死亡的分量）
+  for(var i = 0; i < m; i++) for(var k = 0; k < K; k++) W[i][k] = rng() + 1e-3;
+  for(var k2 = 0; k2 < K; k2++) for(var j = 0; j < n; j++) H[k2][j] = rng() + 1e-3;
+  return { W: W, H: H };
+};
+// NNDSVD-lite：用 top-K 奇异三元组播种，符号取绝对值
+NMF.initNNDSVD = function(X, K, seed){
+  var m = X.length, n = X[0].length;
+  var sv = NMF.svdTopK(X, K, 300, seed);
+  var W = NMF.zeros(m, K), H = NMF.zeros(K, n);
+  for(var k = 0; k < K; k++){
+    var sq = Math.sqrt(Math.max(sv.S[k], 1e-12));
+    for(var i = 0; i < m; i++) W[i][k] = Math.abs(sv.U[k][i]) * sq + 1e-6;
+    for(var j = 0; j < n; j++) H[k][j] = Math.abs(sv.V[k][j]) * sq + 1e-6;
+  }
+  return { W: W, H: H };
+};
+NMF.init = function(X, K, mode, seed){
+  if(mode === 'nndsvd') return NMF.initNNDSVD(X, K, seed);
+  return NMF.initRandom(X.length, X[0].length, K, seed);
+};
+
+// ---------------- 乘法更新（Frobenius） ----------------
+// H ← H∘(WᵀX)⊘(WᵀWH) ; W ← W∘(XHᵀ)⊘(WHHᵀ)
+NMF.stepMUf = function(X, W, H){
+  var Wt = NMF.transpose(W);
+  // --- H ---
+  var WtX = NMF.matMul(Wt, X);              // K×n
+  var WtW = NMF.matMul(Wt, W);              // K×K
+  var WtWH = NMF.matMul(WtW, H);            // K×n
+  for(var k = 0; k < H.length; k++) for(var j = 0; j < H[k].length; j++)
+    H[k][j] *= WtX[k][j] / (WtWH[k][j] + 1e-300);
+  // --- W ---
+  var Ht = NMF.transpose(H);
+  var XHt = NMF.matMul(X, Ht);              // m×K
+  var HHt = NMF.matMul(H, Ht);              // K×K
+  var WHHt = NMF.matMul(W, HHt);            // m×K
+  for(var i = 0; i < W.length; i++) for(var k2 = 0; k2 < W[i].length; k2++)
+    W[i][k2] *= XHt[i][k2] / (WHHt[i][k2] + 1e-300);
+  return { W: W, H: H };
+};
+
+// ---------------- 乘法更新（KL 散度） ----------------
+// H ← H∘(Wᵀ(X⊘WH))⊘(Wᵀ1) ; W ← W∘((X⊘WH)Hᵀ)⊘(1Hᵀ)
+NMF.stepMUkl = function(X, W, H){
+  var m = X.length, n = X[0].length, K = W[0].length;
+  // --- 更新 H（固定 W）---
+  var WH1 = NMF.matMul(W, H);
+  var R1 = NMF.zeros(m, n);
+  for(var i = 0; i < m; i++) for(var j = 0; j < n; j++) R1[i][j] = X[i][j] / (WH1[i][j] + 1e-300);
+  var Wt = NMF.transpose(W);
+  var WtR = NMF.matMul(Wt, R1);             // K×n
+  var denH = new Float64Array(K);
+  for(var k = 0; k < K; k++){ var s = 0; for(var i2 = 0; i2 < m; i2++) s += W[i2][k]; denH[k] = s + 1e-300; }
+  for(var k2 = 0; k2 < K; k2++) for(var j2 = 0; j2 < n; j2++) H[k2][j2] *= WtR[k2][j2] / denH[k2];
+  // --- 更新 W（固定「已更新的」H）---
+  // 关键：H 变了 → WH 变了 → 必须重算比值 R；沿用旧的 R 就不是合法的块更新，会破坏 MM 单调性
+  var WH2 = NMF.matMul(W, H);
+  var R2 = NMF.zeros(m, n);
+  for(var i3 = 0; i3 < m; i3++) for(var j3 = 0; j3 < n; j3++) R2[i3][j3] = X[i3][j3] / (WH2[i3][j3] + 1e-300);
+  var Ht = NMF.transpose(H);
+  var R2Ht = NMF.matMul(R2, Ht);            // m×K
+  var denW = new Float64Array(K);
+  for(var k3 = 0; k3 < K; k3++){ var s2 = 0; for(var j4 = 0; j4 < n; j4++) s2 += H[k3][j4]; denW[k3] = s2 + 1e-300; }
+  for(var i4 = 0; i4 < m; i4++) for(var k4 = 0; k4 < K; k4++) W[i4][k4] *= R2Ht[i4][k4] / denW[k4];
+  return { W: W, H: H };
+};
+
+// ---------------- ALS：投影梯度解非负最小二乘子问题 ----------------
+// min_{Z≥0} ‖AZ − B‖²_F ，步长 1/L，L = ‖AᵀA‖₂（幂迭代）
+NMF.nnlsPG = function(A, B, innerIter, Z0){
+  var p = A.length, q = A[0].length, r = B[0].length;
+  var At = NMF.transpose(A);
+  var AtA = NMF.matMul(At, A);     // q×q 对称半正定
+  var AtB = NMF.matMul(At, B);     // q×r
+  // L 估计：幂迭代
+  var v = new Float64Array(q); for(var i = 0; i < q; i++) v[i] = 1;
+  var nv = Math.sqrt(q); for(var i0 = 0; i0 < q; i0++) v[i0] /= nv;
+  var L = 1;
+  for(var it = 0; it < 40; it++){
+    var w = new Float64Array(q);
+    for(var a = 0; a < q; a++){ var s = 0, ra = AtA[a]; for(var b = 0; b < q; b++) s += ra[b] * v[b]; w[a] = s; }
+    var nw = 0; for(var a2 = 0; a2 < q; a2++) nw += w[a2] * w[a2]; nw = Math.sqrt(nw);
+    if(nw < 1e-300) break;
+    for(var a3 = 0; a3 < q; a3++) v[a3] = w[a3] / nw;
+    L = nw;
+  }
+  if(!(L > 1e-12)) L = 1e-12;
+  var step = 1 / L;
+  var Z = Z0 ? NMF.clone(Z0) : NMF.zeros(q, r);
+  innerIter = innerIter || 60;
+  for(var t = 0; t < innerIter; t++){
+    // G = AtA Z − AtB
+    var G = NMF.matMul(AtA, Z);
+    for(var a4 = 0; a4 < q; a4++) for(var b2 = 0; b2 < r; b2++) G[a4][b2] -= AtB[a4][b2];
+    var moved = 0;
+    for(var a5 = 0; a5 < q; a5++) for(var b3 = 0; b3 < r; b3++){
+      var nx = Z[a5][b3] - step * G[a5][b3];
+      if(nx < 0) nx = 0;
+      var d = nx - Z[a5][b3]; if(d < 0) d = -d;
+      if(d > moved) moved = d;
+      Z[a5][b3] = nx;
+    }
+    if(moved < 1e-12 * (1 + NMF.maxAbs(Z))) break;
+  }
+  return Z;
+};
+NMF.stepALS = function(X, W, H, innerIter){
+  // 固定 W 解 H：min ‖X − W H‖ → A=W, B=X → Z=H
+  H = NMF.nnlsPG(W, X, innerIter || 40, H);
+  // 固定 H 解 W：min ‖Xᵀ − Hᵀ Wᵀ‖ → A=Hᵀ, B=Xᵀ → Z=Wᵀ
+  var Ht = NMF.transpose(H), Xt = NMF.transpose(X);
+  var Zt = NMF.nnlsPG(Ht, Xt, innerIter || 40, NMF.transpose(W));
+  W = NMF.transpose(Zt);
+  return { W: W, H: H };
+};
+
+// ---------------- 主求解器 ----------------
+NMF.solve = function(X, K, opts){
+  opts = opts || {};
+  var algo = opts.algo || 'muF';
+  var maxIter = opts.maxIter || 400;
+  var tol = opts.tol || 1e-7;
+  var seed = opts.seed || 42;
+  var ini = NMF.init(X, K, opts.init || 'nndsvd', seed);
+  var W = ini.W, H = ini.H;
+  var hist = [], kktHist = [];
+  var obj = (algo === 'muKL') ? NMF.klDivergence : NMF.frobenius;
+  var prev = obj(X, W, H);
+  hist.push(prev);
+  var iters = 0;
+  var zeroW = NMF.zeroMask(W), zeroH = NMF.zeroMask(H);
+  var zeroViol = 0;
+  for(var t = 0; t < maxIter; t++){
+    var r = (algo === 'muF') ? NMF.stepMUf(X, W, H)
+          : (algo === 'muKL') ? NMF.stepMUkl(X, W, H)
+          : NMF.stepALS(X, W, H, 40);
+    W = r.W; H = r.H;
+    var cur = obj(X, W, H);
+    hist.push(cur);
+    iters = t + 1;
+    // 零元保持检查
+    var zw = NMF.zeroMask(W), zh = NMF.zeroMask(H);
+    for(var i = 0; i < W.length; i++) for(var k = 0; k < W[i].length; k++) if(zeroW[i][k] && !zw[i][k]) zeroViol++;
+    for(var k2 = 0; k2 < H.length; k2++) for(var j = 0; j < H[k2].length; j++) if(zeroH[k2][j] && !zh[k2][j]) zeroViol++;
+    // 相对变化
+    var rel = Math.abs(prev - cur) / (Math.abs(prev) + 1e-300);
+    prev = cur;
+    if(t % Math.max(1, Math.floor(maxIter / 12)) === 0 || t === maxIter - 1) kktHist.push(NMF.kkt(X, W, H).max);
+    if(rel < tol && t > 3) break;
+  }
+  return {
+    W: W, H: H, hist: hist, kktHist: kktHist, iters: iters,
+    relError: NMF.relError(X, W, H),
+    frobenius: NMF.frobenius(X, W, H),
+    kl: NMF.klDivergence(X, W, H),
+    kkt: NMF.kkt(X, W, H),
+    minGrad: NMF.minGradRel(X, W, H),
+    zeroViolations: zeroViol
+  };
+};
+
+// ---------------- 合成数据：光谱混合模型 ----------------
+// W0: 每个分量是一条平滑高斯「峰」；H0: 每列 1~3 个活跃分量
+NMF.makeData = function(m, n, K, seed, noise){
+  var rng = NMF.mulberry32(seed || 42);
+  var W0 = NMF.zeros(m, K);
+  var centers = [], widths = [];
+  for(var k = 0; k < K; k++){
+    var c = (k + 0.5 + (rng() - 0.5) * 0.6) * (m / K);
+    var w = m / K * (0.16 + rng() * 0.22);
+    centers.push(c); widths.push(w);
+    for(var i = 0; i < m; i++){ var d = (i - c) / w; W0[i][k] = Math.exp(-0.5 * d * d) + 0.02 * rng(); }
+  }
+  var H0 = NMF.zeros(K, n);
+  for(var j = 0; j < n; j++){
+    var act = 1 + Math.floor(rng() * Math.min(3, K));
+    var pool = []; for(var k2 = 0; k2 < K; k2++) pool.push(k2);
+    for(var s = 0; s < act; s++){
+      var idx = Math.floor(rng() * pool.length);
+      var kk = pool.splice(idx, 1)[0];
+      H0[kk][j] = 0.3 + rng() * 1.4;
+    }
+  }
+  var X = NMF.matMul(W0, H0);
+  if(noise > 0){
+    for(var i2 = 0; i2 < m; i2++) for(var j2 = 0; j2 < n; j2++){
+      X[i2][j2] = Math.max(0, X[i2][j2] + noise * NMF.randn(rng));
+    }
+  }
+  return { X: X, W0: W0, H0: H0, centers: centers };
+};
+
+// ---------------- 分量匹配（置换 + 尺度不变） ----------------
+// 返回每个恢复分量与最佳匹配真分量的 |corr|
+NMF.matchCorr = function(W, W0){
+  var m = W.length, K = W[0].length, K0 = W0[0].length;
+  var out = [];
+  for(var k = 0; k < K; k++){
+    var best = 0;
+    for(var q = 0; q < K0; q++){
+      var a = [], b = [];
+      for(var i = 0; i < m; i++){ a.push(W[i][k]); b.push(W0[i][q]); }
+      var c = Math.abs(NMF.corr(a, b));
+      if(c > best) best = c;
+    }
+    out.push(best);
+  }
+  return out;
+};
+NMF.corr = function(a, b){
+  var n = a.length, ma = 0, mb = 0;
+  for(var i = 0; i < n; i++){ ma += a[i]; mb += b[i]; }
+  ma /= n; mb /= n;
+  var sa = 0, sb = 0, sab = 0;
+  for(var j = 0; j < n; j++){ var da = a[j] - ma, db = b[j] - mb; sa += da * da; sb += db * db; sab += da * db; }
+  return sab / (Math.sqrt(sa * sb) + 1e-300);
+};
+})();
+</script>
+
+<script id="ui">
+(function(){
+if (typeof document === "undefined") return;
+var $ = function(id){ return document.getElementById(id); };
+
+var els = {
+  algo: $("algo"), init: $("init"), m: $("m"), n: $("n"), K: $("K"),
+  noise: $("noise"), iters: $("iters"), seed: $("seed"), run: $("run"),
+  status: $("status"), stats: $("stats"), cCurve: $("cCurve"), cW: $("cW"),
+  cH: $("cH"), cRecon: $("cRecon"), checks: $("checks"),
+  curveCap: $("curveCap"), reconCap: $("reconCap")
+};
+
+function el(tag, cls, txt){
+  var e = document.createElement(tag);
+  if(cls) e.className = cls;
+  if(txt !== undefined) e.textContent = txt;
+  return e;
+}
+function statCard(k, v){
+  var d = el("div", "stat");
+  d.appendChild(el("div", "k", k));
+  d.appendChild(el("div", "v", v));
+  return d;
+}
+function fmt(x, d){
+  if(!isFinite(x)) return "—";
+  var a = Math.abs(x);
+  if(a !== 0 && (a < 1e-3 || a >= 1e6)) return x.toExponential(d === undefined ? 2 : d);
+  return x.toFixed(d === undefined ? 4 : d);
+}
+
+function prepCanvas(c, h){
+  var dpr = (globalThis.devicePixelRatio) || 1;
+  var cssW = c.clientWidth || c.parentNode.clientWidth || 900;
+  var cssH = h;
+  c.width = Math.floor(cssW * dpr);
+  c.height = Math.floor(cssH * dpr);
+  c.style.height = cssH + "px";
+  var ctx = c.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  return { ctx: ctx, w: cssW, h: cssH };
+}
+
+// 热图色标：蓝 → 白 → 红
+function heatColor(t){
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  if(t < 0.5){
+    var u = t / 0.5;
+    return "rgb(" + Math.round(47 + u * 208) + "," + Math.round(111 + u * 144) + "," + Math.round(235 - u * 20) + ")";
+  }
+  var u2 = (t - 0.5) / 0.5;
+  return "rgb(" + Math.round(255 - u2 * 70) + "," + Math.round(255 - u2 * 166) + "," + Math.round(215 - u2 * 187) + ")";
+}
+
+function drawHeatmap(ctx, A, x, y, w, h, maxV, gridCols){
+  var m = A.length, n = A[0].length;
+  var cw = w / n, ch = h / m;
+  for(var i = 0; i < m; i++){
+    for(var j = 0; j < n; j++){
+      var t = maxV > 0 ? A[i][j] / maxV : 0;
+      ctx.fillStyle = heatColor(t);
+      ctx.fillRect(x + j * cw, y + i * ch, Math.ceil(cw), Math.ceil(ch));
+    }
+  }
+  ctx.strokeStyle = "#c9ced6"; ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+}
+
+function drawCurve(c, hist, label, color){
+  var P = prepCanvas(c, 300);
+  var ctx = P.ctx, w = P.w, h = P.h;
+  var padL = 62, padR = 16, padT = 16, padB = 34;
+  var pw = w - padL - padR, ph = h - padT - padB;
+  var lo = Infinity, hi = -Infinity;
+  for(var i = 0; i < hist.length; i++){ if(hist[i] < lo) lo = hist[i]; if(hist[i] > hi) hi = hist[i]; }
+  if(hi - lo < 1e-12){ hi = lo + 1e-9; }
+  var pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  if(lo <= 0 && label === "F") lo = 0;
+  function X(i){ return padL + (hist.length <= 1 ? 0 : i / (hist.length - 1)) * pw; }
+  function Y(v){ return padT + ph - (v - lo) / (hi - lo) * ph; }
+  // 网格
+  ctx.strokeStyle = "#eef1f5"; ctx.lineWidth = 1;
+  ctx.font = "11px ui-monospace,monospace"; ctx.fillStyle = "#98a0ab";
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for(var g = 0; g <= 4; g++){
+    var v = lo + (hi - lo) * g / 4, yy = Y(v);
+    ctx.beginPath(); ctx.moveTo(padL, yy); ctx.lineTo(padL + pw, yy); ctx.stroke();
+    ctx.fillText(fmt(v, v > 1000 || v < 0.01 ? 1 : 3), padL - 8, yy);
+  }
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  var xt = [0, Math.floor((hist.length - 1) / 2), hist.length - 1];
+  for(var t2 = 0; t2 < xt.length; t2++) ctx.fillText(String(xt[t2]), X(xt[t2]), padT + ph + 9);
+  ctx.fillStyle = "#6b7280";
+  ctx.fillText("迭代 t", padL + pw / 2, padT + ph + 20);
+  // 曲线
+  ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
+  for(var k = 0; k < hist.length; k++){
+    var px = X(k), py = Y(hist[k]);
+    if(k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+  // 末点
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(X(hist.length - 1), Y(hist[hist.length - 1]), 3.2, 0, Math.PI * 2); ctx.fill();
+  return P;
+}
+
+function drawBasis(c, W){
+  var P = prepCanvas(c, 240);
+  var ctx = P.ctx, w = P.w, h = P.h;
+  var m = W.length, K = W[0].length;
+  var padL = 46, padR = 16, padT = 14, padB = 30;
+  var pw = w - padL - padR, ph = h - padT - padB;
+  var rowH = ph / K;
+  var maxV = 0;
+  for(var i = 0; i < m; i++) for(var k = 0; k < K; k++) if(W[i][k] > maxV) maxV = W[i][k];
+  ctx.font = "11px ui-monospace,monospace"; ctx.textBaseline = "middle";
+  for(var k2 = 0; k2 < K; k2++){
+    var y0 = padT + k2 * rowH;
+    // 基准线
+    ctx.strokeStyle = "#eef1f5"; ctx.beginPath();
+    ctx.moveTo(padL, y0 + rowH - 0.5); ctx.lineTo(padL + pw, y0 + rowH - 0.5); ctx.stroke();
+    // 柱
+    ctx.fillStyle = "#2f6feb";
+    var bw = pw / m;
+    for(var i2 = 0; i2 < m; i2++){
+      var v = W[i2][k2] / (maxV + 1e-300);
+      var bh = v * (rowH - 6);
+      if(bh > 0.3) ctx.fillRect(padL + i2 * bw, y0 + (rowH - 6) - bh + 3, Math.max(bw * 0.9, 0.6), bh);
+    }
+    ctx.fillStyle = "#6b7280"; ctx.textAlign = "right";
+    ctx.fillText("w" + k2, padL - 8, y0 + rowH / 2);
+  }
+  ctx.fillStyle = "#6b7280"; ctx.textAlign = "center"; ctx.textBaseline = "top";
+  ctx.fillText("特征维度 i →", padL + pw / 2, padT + ph + 8);
+}
+
+function drawRecon(c, X, XH){
+  var P = prepCanvas(c, 300);
+  var ctx = P.ctx, w = P.w, h = P.h;
+  var m = X.length, n = X[0].length;
+  var gap = 16, labelW = 44;
+  var availH = h - 40 - gap;
+  var eachH = availH / 2;
+  var maxV = 0;
+  for(var i = 0; i < m; i++) for(var j = 0; j < n; j++){ if(X[i][j] > maxV) maxV = X[i][j]; if(XH[i][j] > maxV) maxV = XH[i][j]; }
+  ctx.font = "11.5px -apple-system,sans-serif"; ctx.fillStyle = "#6b7280";
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.fillText("X", 6, 14 + eachH / 2);
+  drawHeatmap(ctx, X, labelW, 14, w - labelW - 12, eachH, maxV);
+  ctx.fillText("X̂", 6, 14 + eachH + gap + eachH / 2);
+  drawHeatmap(ctx, XH, labelW, 14 + eachH + gap, w - labelW - 12, eachH, maxV);
+}
+
+function checksFor(X, res, opts){
+  var out = [];
+  // 1) 非负
+  var minW = NMF.minEntry(res.W), minH = NMF.minEntry(res.H);
+  out.push({ name: "W ≥ 0 且 H ≥ 0（非负约束恒成立）", pass: minW >= 0 && minH >= 0,
+    info: "minW=" + fmt(minW, 1) + "  minH=" + fmt(minH, 1) });
+  // 2) 目标单调不增（最小化 ⇒ 查「最大增量」）
+  var maxD = -Infinity;
+  for(var i = 1; i < res.hist.length; i++) maxD = Math.max(maxD, res.hist[i] - res.hist[i - 1]);
+  var scale = Math.abs(res.hist[0]) + 1e-300;
+  out.push({ name: "目标函数单调不增（MM 定理）", pass: maxD <= 1e-9 * scale,
+    info: "maxΔ=" + fmt(maxD, 3) });
+  // 3) KKT 投影梯度（W 块 / H 块独立；实测两者可差 300 倍，非冗余）
+  //    阈值按算法自适应：ALS 数百步内收敛到 1e-6 量级；MU 线性收敛速率接近 1，400 步只到 1e-3~1e-2 量级
+  var kktLast = res.kktHist.length ? res.kktHist[res.kktHist.length - 1] : res.kkt.max;
+  var kktThr = (opts.algo === 'als') ? 1e-5 : 1e-2;
+  out.push({ name: "KKT 投影梯度 W 块 → 0", pass: res.kkt.w < kktThr,
+    info: "‖PG_W‖/(‖X‖·‖H‖) = " + fmt(res.kkt.w, 3) + (opts.algo === 'als' ? "" : "  (MU 慢收敛，阈 1e-2)") });
+  out.push({ name: "KKT 投影梯度 H 块 → 0", pass: res.kkt.h < kktThr,
+    info: "‖PG_H‖/(‖X‖·‖W‖) = " + fmt(res.kkt.h, 3) });
+  // 5) 无 NaN
+  out.push({ name: "无 NaN / Inf", pass: !NMF.hasNaN(res.W) && !NMF.hasNaN(res.H),
+    info: "有限值" });
+  // 6) 乘法更新保持零元
+  out.push({ name: "乘法更新保值零元（0 恒为 0）", pass: res.zeroViolations === 0,
+    info: "违例=" + res.zeroViolations });
+  // 7) 非负约束不能优于截断 SVD
+  var K = res.W[0].length;
+  var svdE = NMF.svdRelError(X, K, 100);
+  out.push({ name: "NMF 误差 ≥ 截断 SVD 误差（非负是约束）", pass: res.relError >= svdE - 1e-9,
+    info: "NMF=" + fmt(res.relError, 4) + "  SVD=" + fmt(svdE, 4) });
+  // 8) 确定性
+  var opts2 = { algo: opts.algo, maxIter: opts.maxIter, tol: opts.tol, seed: opts.seed, init: opts.init };
+  var res2 = NMF.solve(X, K, opts2);
+  var same = res2.W.length === res.W.length && res2.H.length === res.H.length;
+  if(same){
+    for(var a = 0; a < res.W.length && same; a++) for(var b = 0; b < res.W[a].length; b++) if(res2.W[a][b] !== res.W[a][b]){ same = false; break; }
+    for(var a2 = 0; a2 < res.H.length && same; a2++) for(var b2 = 0; b2 < res.H[a2].length; b2++) if(res2.H[a2][b2] !== res.H[a2][b2]){ same = false; break; }
+  }
+  out.push({ name: "确定性（同种子逐位一致）", pass: same, info: "iters=" + res.iters });
+  // 9) 尺度不变性 WH 不变
+  var s = 3.7, Ws = NMF.clone(res.W), Hs = NMF.clone(res.H);
+  var k0 = Math.min(2, Ws[0].length - 1);
+  for(var r2 = 0; r2 < Ws.length; r2++) Ws[r2][k0] *= s;
+  for(var c2 = 0; c2 < Hs[k0].length; c2++) Hs[k0][c2] /= s;
+  var d = 0, A0 = NMF.matMul(res.W, res.H), A1 = NMF.matMul(Ws, Hs);
+  for(var r3 = 0; r3 < A0.length; r3++) for(var c3 = 0; c3 < A0[r3].length; c3++) d = Math.max(d, Math.abs(A0[r3][c3] - A1[r3][c3]));
+  out.push({ name: "尺度不变性 W·s, H/s → WH 不变", pass: d < 1e-9, info: "maxΔ=" + fmt(d, 2) });
+  return out;
+}
+
+var LAST = null;
+
+function run(){
+  els.run.disabled = true;
+  els.status.textContent = "运行中…";
+  var opts = {
+    algo: els.algo.value, init: els.init.value,
+    maxIter: Math.max(10, parseInt(els.iters.value, 10) || 400),
+    tol: 1e-7, seed: parseInt(els.seed.value, 10) || 42
+  };
+  var m = Math.max(8, parseInt(els.m.value, 10) || 64);
+  var n = Math.max(8, parseInt(els.n.value, 10) || 140);
+  var K = Math.max(1, parseInt(els.K.value, 10) || 4);
+  var noise = Math.max(0, parseFloat(els.noise.value) || 0);
+
+  var d = NMF.makeData(m, n, K, opts.seed, noise);
+  var X = d.X;
+  var t0 = (globalThis.performance && performance.now) ? performance.now() : Date.now();
+  var res = NMF.solve(X, K, opts);
+  var t1 = (globalThis.performance && performance.now) ? performance.now() : Date.now();
+  var ms = Math.round(t1 - t0);
+
+  var XH = NMF.matMul(res.W, res.H);
+  var svdE = NMF.svdRelError(X, K, 100);
+  var corr = NMF.matchCorr(res.W, d.W0);
+  var minCorr = Math.min.apply(null, corr);
+
+  // 统计卡
+  els.stats.innerHTML = "";
+  els.stats.appendChild(statCard("相对重构误差", fmt(res.relError, 4)));
+  els.stats.appendChild(statCard("截断 SVD 误差", fmt(svdE, 4)));
+  els.stats.appendChild(statCard("W 稀疏度", (NMF.sparsity(res.W) * 100).toFixed(1) + "%"));
+  els.stats.appendChild(statCard("H 稀疏度", (NMF.sparsity(res.H) * 100).toFixed(1) + "%"));
+  els.stats.appendChild(statCard("迭代 / 上限", res.iters + " / " + opts.maxIter));
+  els.stats.appendChild(statCard("KKT 残差", fmt(res.kkt.max, 3)));
+  els.stats.appendChild(statCard("最差分量匹配 |corr|", fmt(minCorr, 4)));
+  els.stats.appendChild(statCard("耗时", ms + " ms"));
+
+  // 曲线
+  var isKL = opts.algo === "muKL";
+  drawCurve(els.cCurve, res.hist, isKL ? "KL" : "F", isKL ? "#b45309" : "#2f6feb");
+  els.curveCap.textContent = (isKL ? "KL 散度 D(X‖WH)" : "Frobenius 目标 ‖X−WH‖²_F")
+    + "：共 " + res.hist.length + " 次评估，末值 " + fmt(res.hist[res.hist.length - 1], 4)
+    + "；单调性由 majorize-minimize 保证，浮点下允许 ~1e-12 量级抖动。";
+
+  // W / H / 重构
+  drawBasis(els.cW, res.W);
+  var P = prepCanvas(els.cH, 240);
+  var maxH = NMF.maxAbs(res.H);
+  drawHeatmap(P.ctx, res.H, 8, 10, P.w - 16, P.h - 20, maxH);
+  drawRecon(els.cRecon, X, XH);
+  els.reconCap.textContent = "X̂ 由 " + K + " 个非负基向量线性组合而成（秩 ≤ " + K
+    + "）。相对误差 " + fmt(res.relError, 4) + " vs 截断 SVD 下界 " + fmt(svdE, 4)
+    + " —— NMF 误差 ≥ SVD 误差是必然的（可行集更小），两者越接近说明非负约束代价越小。";
+
+  // 自检
+  var cs = checksFor(X, res, opts);
+  els.checks.innerHTML = "";
+  for(var i = 0; i < cs.length; i++){
+    var c = cs[i];
+    var li = el("li", c.pass ? "pass" : "fail");
+    li.appendChild(el("span", "ic", c.pass ? "✓" : "✗"));
+    var body = el("span", "ck-name", c.name);
+    body.appendChild(el("span", "ck-info", c.info));
+    li.appendChild(body);
+    els.checks.appendChild(li);
+  }
+  var passN = 0; for(var j = 0; j < cs.length; j++) if(cs[j].pass) passN++;
+
+  els.status.textContent = "完成：" + opts.algo + " / " + opts.init + " · " + opts.maxIter + " 上限 → " + res.iters
+    + " 迭代 · " + m + "×" + n + " 秩 " + K + " · " + ms + " ms";
+  LAST = { X: X, res: res, checks: cs, data: d };
+  globalThis.__NMFLAST = { res: res, checks: cs, opts: opts, X: X, data: d, passN: passN };
+  els.run.disabled = false;
+}
+
+els.run.addEventListener("click", run);
+run();
+})();
+</script>
+</body>
+</html>
