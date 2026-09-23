@@ -1,5 +1,12 @@
 # nmf-forge
 
+<p align="center">
+  <a href="https://github.com/CJX0712/nmf-forge/actions/workflows/ci.yml"><img src="https://github.com/CJX0712/nmf-forge/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+  <a href="https://github.com/CJX0712/nmf-forge/releases"><img src="https://img.shields.io/github/v/release/CJX0712/nmf-forge?sort=semver" alt="release"></a>
+  <a href="https://github.com/CJX0712/nmf-forge/blob/main/LICENSE"><img src="https://img.shields.io/github/license/CJX0712/nmf-forge" alt="license"></a>
+  <img src="https://img.shields.io/badge/author-%E6%99%A8%E6%98%9F-1f6feb" alt="author">
+</p>
+
 **手写非负矩阵分解（NMF / Non-negative Matrix Factorization）** —— Lee & Seung, *Nature* 399, 788 (1999)。
 
 零依赖、零构建、单文件 HTML。打开 `index.html` 即可运行：内联引擎 + 实时不变量自检面板 + 无头可验证。
